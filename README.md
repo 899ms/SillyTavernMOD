@@ -1,8 +1,9 @@
-﻿# SillyTavern + SillyTavernchat (STC-MOD)
+# SillyTavern + SillyTavernchat (STC-MOD)
 
 LLM Frontend for Power Users  
-本仓库基于 **SillyTavern 1.18.0 官方版本**，在其上通过「外挂模块 / Sidecar Module」方式集成了
-`SillyTavernchat (STC-MOD)` 的一系列管理与运营功能，同时尽量保持对上游的 **低侵入、易升级**。
+本仓库当前基于 **SillyTavern 1.19.0 官方版本**（2026-09-15 已同步），在其上通过「外挂模块 / Sidecar Module」方式集成
+`SillyTavernchat (STC-MOD)` 的管理与运营功能，同时尽量保持对上游的 **低侵入、易升级**。详细二开边界、上游基线与升级记录见
+[MODIFICATIONS.md](MODIFICATIONS.md)。
 
 ---
 

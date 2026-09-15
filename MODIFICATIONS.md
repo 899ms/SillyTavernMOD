@@ -1,9 +1,10 @@
 # SillyTavernchat (STC-MOD) 修改文档
 
-> 本文件记录了在官方 SillyTavern 1.16.0 代码基础上进行的所有修改，
+> 本文件记录在官方 SillyTavern 基础上进行的二次开发，
 > 以便后续官方版本升级时快速定位和维护这些修改点。
 >
-> **最后更新**：基于当前实际代码状态同步。
+> **当前上游基线**：SillyTavern **1.19.0**（upstream tag / commit `7e8663cd9c184a550b37238218bdd32c6efc68e9`）。
+> **最近同步**：2026-09-15，合并提交 `b217d36eec988d93b0fc28f90af447b3aa9b8198`（`Merge upstream SillyTavern 1.19.0`）。
 
 ## 架构概述
 
@@ -14,18 +15,18 @@
 
 ### `src/server-main.js`
 
-> **升级排查**：在仓库根目录执行 `rg "\[STC-MOD\]" src/server-main.js` 可列出全部注入点（当前共 **7 处标记 / 6 个钩子 + 1 处静态缓存替换**）。  
-> 下列行号基于 **SillyTavern 1.18.0 + 当前 MOD** 的 `src/server-main.js`（文件总行数约 **530**）；合并上游后行号会漂移，以 `[STC-MOD]` 注释与相邻官方代码锚点为准。
+> **升级排查**：在仓库根目录执行 `rg "\[STC-MOD\]" src/server-main.js` 可列出全部注入点（当前共 **7 个功能标记 / 6 个挂钩 + Cookie 条件配置 + 1 处静态缓存替换**）。
+> 下列行号基于 **SillyTavern 1.19.0 + 当前 MOD** 的 `src/server-main.js`（文件总行数 **539**）；合并上游后行号会漂移，以 `[STC-MOD]` 注释与相邻官方代码锚点为准。
 
 | 钩子编号 | 行号（当前） | 官方锚点（插入位置） | 修改内容 | 目的 |
 |---------|------------|---------------------|---------|------|
 | **A** | **68–76** | `import { UPLOADS_DIRECTORY } from './constants.js';` 之后、`// Routers` 之前 | 动态 `import('./stc-mod/index.js')` → `stcMod` | 加载 Sidecar 模块 |
-| **G** | **166–169** | `app.use(accessLoggerMiddleware());` 与 `app.use(cookieSession({` **之间** | `stcMod.configureTrustProxy(app)` | 反代：`deployment.trustProxy` → Express `trust proxy`（须在 session/CSRF 之前） |
-| **B** | **203–205** | `csrfSync({ skipCsrfProtection })` 内、`return proxyBypass` 之前 | `stcMod.shouldSkipCsrf(req)` | STC 公开 API 的 CSRF 豁免 |
-| **C** | **230–231** | CSRF 中间件注册完毕之后、`// Static files` / `app.get('/', ...)` **之前** | `stcMod.setupPublicRoutes(app)` | 欢迎页 / 登录页 / 注册页等路由覆盖 |
-| **F** | **263–275** | 官方 `app.use(express.static(..., {}))` **整段替换** | 为 `public/` 静态资源增加 `maxAge` / `Cache-Control` | 降低 VPS 重复下载 JS/CSS |
-| **D** | **280–281** | `app.use('/api/users', usersPublicRouter)` 之后、`requireLoginMiddleware` **之前** | `stcMod.setupPublicApi(app)` | 无需登录的 STC 公开 API |
-| **E** | **316–317** | `setupPrivateEndpoints(app)` 之后 | `stcMod.setupPrivateRoutes(app)` | 需登录的 STC 私有 API |
+| **G** | **166–169** | `app.use(accessLoggerMiddleware());` 之后、会话配置之前 | `stcMod.configureTrustProxy(app)` | 反代：`deployment.trustProxy` → Express `trust proxy`（须在 session/CSRF 之前） |
+| **B** | **209–214** | `csrfSync` 的 `skipCsrfProtection` 回调内 | `stcMod.shouldSkipCsrf(req)` 与官方 `proxyBypass` 取 OR | STC 公开 API 的最小 CSRF 豁免 |
+| **C** | **238–239** | CSRF 中间件注册完毕之后、`app.get('/', ...)` **之前** | `stcMod.setupPublicRoutes(app)` | 欢迎页 / 登录页 / 注册页等路由覆盖 |
+| **F** | **271–283** | 官方 `webpackMiddleware` / `userCssMiddleware` 之后的静态资源中间件 | 为 `public/` 静态资源增加 `maxAge` / `Cache-Control` | 降低 VPS 重复下载 JS/CSS |
+| **D** | **288–289** | `app.use('/api/users', usersPublicRouter)` 之后、`requireLoginMiddleware` **之前** | `stcMod.setupPublicApi(app)` | 无需登录的 STC 公开 API |
+| **E** | **324–325** | `setupPrivateEndpoints(app)` 之后 | `stcMod.setupPrivateRoutes(app)` | 需登录的 STC 私有 API |
 
 #### `src/server-main.js` 注入代码全文（便于 diff / 合并上游）
 
@@ -52,22 +53,25 @@ if (stcMod?.configureTrustProxy) {
 }
 ```
 
-Sidecar 实现：`src/stc-mod/middleware/trust-proxy.js`；配置项：`config.yaml` → `deployment.trustProxy`（默认 `null`，会**自动探测**反代环境变量；手动设为 `1` 可强制单层反代）。
+Sidecar 实现：`src/stc-mod/middleware/trust-proxy.js`；配置项：`config.yaml` → `deployment.trustProxy`。该值必须按实际网络拓扑显式配置，默认 `false`；不会再基于环境变量或请求头自动探测。
 
-**同时修改 cookieSession（第 171–177 行）**：
+**同时替换 cookieSession 配置（第 171–184 行）**：
 
 ```javascript
-app.use(cookieSession({
+const stcCookieSessionOptions = {
     name: getCookieSessionName(),
     sameSite: 'lax',
     httpOnly: true,
     maxAge: getSessionCookieAge(),
     secret: getCookieSecret(globalThis.DATA_ROOT),
-    secure: 'auto',  // ✅ 反代 HTTPS 时自动启用 Secure flag
-}));
+};
+if (app.locals.stcTrustProxyEnabled) {
+    stcCookieSessionOptions.secure = 'auto';
+}
+app.use(cookieSession(stcCookieSessionOptions));
 ```
 
-（原官方代码无 `secure` 字段，需增加 `, secure: 'auto'`）。
+仅在 Sidecar 已启用可信反代时设置 `secure: 'auto'`，避免本地明文 HTTP 会话 Cookie 被浏览器丢弃。
 
 **钩子 B — 第 203–205 行**（在 `skipCsrfProtection` 回调内）
 
@@ -152,20 +156,19 @@ if (stcMod?.setupPrivateRoutes) await stcMod.setupPrivateRoutes(app);
 ### 具体代码差异
 
 #### `src/endpoints/secrets.js` 后端接口注入
-在核心逻辑中引入 STC-MOD API 密钥保险箱 (`src/stc-mod/services/privacy-vault.js`) 的方法：
-- **`writeSecret` (约第 339 行)**：写入保存 API key 前，拦截检测；若目标 Key 被保险箱保护且状态合规，则对 `value` 进行加密后再落盘，若保险箱被要求开启但未开启，则抛出 `VaultRequiredError` 阻断写入。
-- **`readSecret` (约第 286 行)**：读取 API key 时，判断如果内容已被加密，则请求保险箱解密后再返回。若此时保险箱是锁定状态，向前端抛出 `VaultLockedError`。
-- **`getSecretState` (约第 262 行)**：如果是已被加密的 Key，在前端界面将明文展示修改为 `*******`（隐藏真实密文的截断部分），并增加 `encrypted: true` 标识。
-- **`enableVault` (新增，约第 406 行)**：提供一个新方法给路由层调用，用于第一次激活保险箱功能，并遍历已有的 API key 将其批量加密。
-- **`resetVaultAndClearEncryptedKeys` (新增)**：用于重置保险箱，清空内存密钥、删除保险箱记录文件，并清理 `secrets.json` 中所有已加密的 API key 条目（没有密码后再也无法解密）。
-- **`/write`, `/view`, `/find` API 路由 (约第 496, 529, 545 行)**：增加对保险箱专属错误码（423 Locked / 428 Precondition Required）的捕获与响应封装 `sendVaultError`。
+在核心逻辑中引入 STC-MOD API 密钥保险箱（`src/stc-mod/services/privacy-vault.js`）的方法；以下位置基于 1.19.0 合并结果：
+- **`writeSecret`（约第 324–335 行）**：写入 API key 前拦截检测；状态合规时加密 `value` 后落盘，要求启用保险箱但尚未启用时抛出 `VaultRequiredError`。
+- **`readSecret`（约第 415–432 行）**：检测密文并通过保险箱解密；锁定时抛出 `VaultLockedError`。
+- **`getSecretState`（约第 514–529 行）**：加密 Key 在前端显示为 `*******`，并带 `encrypted: true` 标识，绝不返回密文负载。
+- **`enableVault` / `resetVaultAndClearEncryptedKeys`**：由私有保险箱路由调用，分别用于批量加密已有 key，以及在确认不可恢复时清除保险箱与加密条目。
+- **`/write`、`/read`、`/view`、`/find`（约第 682–792 行）**：捕获保险箱异常并通过 `sendVaultError` 返回 423 Locked 或 428 Precondition Required，同时保留上游 1.19.0 的路由校验与错误处理。
 
 #### `public/scripts/secrets.js` 前端拦截注入
-在前端增加相关的交互和校验代码：
-- **API 密钥保险箱模块 (约第 340-534 行)**：新增了整个 `STC-MOD` 代码块，包括 `readSecretVaultStatus`, `askVaultPassphrase`, `enableSecretVault`, `unlockSecretVault`, `ensureSecretVaultReadyForWrite`, `retrySecretWriteAfterVaultAction`, `maybeOfferVaultMigration`。
-- **`writeSecret` 拦截 (约第 553-566 行)**：覆盖原有的 `fetch('/api/secrets/write')` 调用前，执行 `ensureSecretVaultReadyForWrite()` 拦截；如果后端返回保险箱相关错误，则通过 `retrySecretWriteAfterVaultAction()` 再次引导用户。
-- **`readSecretState` 更新检测 (约第 624 行)**：在成功加载秘密状态后，调用 `maybeOfferVaultMigration()` 检测是否需要提示用户加密旧明文密钥。
-- **`initSecrets` 初始化检测 (约第 1341-1344 行)**：在进入界面时通过 `readSecretVaultStatus()` 读取状态，并在已锁定时弹出 toast 提示。
+在前端增加相关的交互和校验代码（以下位置基于 1.19.0 合并结果）：
+- **API 密钥保险箱模块（第 341–530 行）**：`STC-MOD` 代码块包含 `readSecretVaultStatus`、`askVaultPassphrase`、`enableSecretVault`、`unlockSecretVault`、`ensureSecretVaultReadyForWrite`、`retrySecretWriteAfterVaultAction`、`maybeOfferVaultMigration`。
+- **`writeSecret` 拦截（第 541 行起）**：调用 `/api/secrets/write` 前执行 `ensureSecretVaultReadyForWrite()`；收到保险箱错误后以 `retrySecretWriteAfterVaultAction()` 引导用户。
+- **`readSecretState`（第 613 行起）**：成功加载秘密状态后调用 `maybeOfferVaultMigration()`。
+- **`initSecrets`（第 1375 行起）**：进入界面时读取保险箱状态；锁定状态显示 toast。
 
 #### `public/scripts/extensions/third-party/stc-admin-panel/index.js` 悬浮用户面板集成
 
