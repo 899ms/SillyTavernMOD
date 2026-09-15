@@ -1,4 +1,4 @@
-FROM node:lts-alpine3.23
+FROM node:20-alpine
 
 # Arguments
 ARG APP_HOME=/home/node/app
