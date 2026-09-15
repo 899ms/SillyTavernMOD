@@ -1,4 +1,4 @@
-FROM node:20-alpine
+FROM node:23-alpine
 
 # Arguments
 ARG APP_HOME=/home/node/app
